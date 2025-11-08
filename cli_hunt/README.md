@@ -51,6 +51,11 @@ cd .. # Go back to the cli_hunt dir
 
 This will create an executable solver in `cli_hunt/rust_solver/target/release/`.
 
+> Optional: by default each solver will run with 1GB of ram, on 2 CPU threads.
+> You can change the number of threads per solver by changing the constant
+> `const NUM_THREADS: u64 = 2;`
+> in the main.rs file, then rerun `cargo build --release`.
+
 ### Python Orchestrator Setup
 
 Navigate to the `python_orchestrator` directory and install the Python dependencies using `uv`:
@@ -88,6 +93,10 @@ Once the database is initialized, you can start the main mining loop and TUI. Fr
 ```bash
 uv run main.py run
 ```
+
+> Optional: by default, 2 solutions will be solved in parallel.
+> You can change that number with the argument `--max-solvers 3` for example.
+> Remark that by default each solver will use 1GB of ram, and 2 threads.
 
 This will launch the TUI, providing visual feedback on the progress of fetching new challenges, solving them with the Rust binary, and submitting solutions. The orchestrator will continuously manage the mining process.
 

@@ -6,7 +6,7 @@ import concurrent.futures
 import subprocess
 import threading
 from copy import deepcopy
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from curl_cffi import requests
 from tui import ChallengeUpdate, LogMessage, OrchestratorTUI, RefreshTable
@@ -19,6 +19,7 @@ RUST_SOLVER_PATH = (
     "../rust_solver/target/release/ashmaize-solver"  # Assuming it's built
 )
 FETCH_INTERVAL = 10 * 60  # 10 minutes
+DEFAULT_MAX_SOLVERS = 2  # Two solvers in parallel by default
 DEFAULT_SOLVE_INTERVAL = 2 * 60  # 2 minutes
 DEFAULT_SAVE_INTERVAL = 10 * 60  # 10 minutes
 
@@ -262,6 +263,7 @@ def _solve_one_challenge(db_manager, tui_app, stop_event, address, challenge):
             "--no-pre-mine-hour",
             str(c["noPreMineHour"]),  # Convert to string for subprocess
         ]
+        start_time = datetime.now(timezone.utc)
         process = subprocess.Popen(
             command,
             stdout=subprocess.PIPE,
@@ -294,7 +296,17 @@ def _solve_one_challenge(db_manager, tui_app, stop_event, address, challenge):
 
         nonce = stdout.strip()
         solved_time = datetime.now(timezone.utc)
-        tui_app.post_message(LogMessage(f"Found nonce: {nonce} for {c['challengeId']}"))
+        solve_duration = (solved_time - start_time).total_seconds()
+        num_hashes = int(
+            nonce, 16
+        )  # Assuming nonce is a hex string representing the number of hashes
+        hash_rate = num_hashes / solve_duration if solve_duration > 0 else 0
+
+        tui_app.post_message(
+            LogMessage(
+                f"Found nonce: {nonce} for {c['challengeId']} (Solve time: {solve_duration:.2f}s, Hash rate: {hash_rate:.2f} H/s)"
+            )
+        )
 
         submit_url = f"https://scavenger.prod.gd.midnighttge.io/solution/{address}/{c['challengeId']}/{nonce}"
         submit_response = session.post(submit_url)
@@ -602,8 +614,8 @@ def main():
     run_parser.add_argument(
         "--max-solvers",
         type=int,
-        default=4,  # A sensible default
-        help="Maximum number of concurrent solver processes to run (default: 4).",
+        default=DEFAULT_MAX_SOLVERS,  # A sensible default
+        help=f"Maximum number of concurrent solver processes to run (default: {DEFAULT_MAX_SOLVERS}).",
     )
     run_parser.add_argument(
         "--solve-interval",
