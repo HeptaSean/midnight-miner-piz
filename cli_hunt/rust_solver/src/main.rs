@@ -1,7 +1,10 @@
 use ashmaize::{hash, Rom, RomGenerationType};
 use clap::Parser;
-use std::fmt::Write;
+use rayon::prelude::*;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
 
+const NUM_THREADS: u64 = 2;
 pub const MB: usize = 1024 * 1024;
 pub const GB: usize = 1024 * MB;
 
@@ -50,12 +53,10 @@ fn main() {
     // Initialize AshMaize ROM
     let rom = init_rom(&args.no_pre_mine);
 
-    let mut nonce: u64 = 0; // Start with a random nonce or 0
-
     // Parse difficulty from hex string to u32 mask
     let difficulty_mask = u32::from_str_radix(&args.difficulty, 16).unwrap();
 
-    // Pre-compute the string suffix
+    // Compute suffix once
     let suffix = format!(
         "{}{}{}{}{}{}",
         args.address,
@@ -66,21 +67,40 @@ fn main() {
         args.no_pre_mine_hour
     );
 
-    // Pre-allocate the string for the pre-image
-    let mut preimage = String::with_capacity(16 + suffix.len());
+    // Share ROM across threads (read-only, no mutex needed)
+    let rom = Arc::new(rom);
 
-    loop {
-        // Update the pre-image with the new nonce
-        preimage.clear();
-        write!(&mut preimage, "{:016x}{}", nonce, suffix).unwrap();
+    let found = Arc::new(AtomicBool::new(false));
+    let result_nonce = Arc::new(AtomicU64::new(0));
+    let start_nonce = 0;
 
-        let hash_result = hash(&preimage.as_bytes(), &rom, 8, 256);
+    (0..NUM_THREADS).into_par_iter().for_each(|thread_id| {
+        let rom = Arc::clone(&rom);
+        let mut local_nonce = start_nonce + thread_id as u64;
+        let stride = NUM_THREADS as u64;
 
-        if hash_structure_good(&hash_result, difficulty_mask) {
-            println!("{:016x}", nonce);
-            break;
+        // Reuse preimage buffer across iterations
+        let mut preimage = String::with_capacity(16 + suffix.len());
+
+        while !found.load(Ordering::Relaxed) {
+            preimage.clear();
+            use std::fmt::Write;
+            write!(&mut preimage, "{:016x}{}", local_nonce, &suffix).unwrap();
+
+            // Each hash call allocates ~15-20KB temporarily
+            let hash_result = hash(preimage.as_bytes(), &rom, 8, 256);
+
+            if hash_structure_good(&hash_result, difficulty_mask) {
+                found.store(true, Ordering::Relaxed);
+                result_nonce.store(local_nonce, Ordering::Relaxed);
+                break;
+            }
+
+            local_nonce += stride;
         }
+    });
 
-        nonce += 1;
+    if found.load(Ordering::Relaxed) {
+        println!("{:016x}", result_nonce.load(Ordering::Relaxed));
     }
 }
