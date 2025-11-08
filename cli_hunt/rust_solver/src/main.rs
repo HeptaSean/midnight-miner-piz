@@ -1,5 +1,6 @@
-use ashmaize::{Rom, RomGenerationType, hash};
+use ashmaize::{hash, Rom, RomGenerationType};
 use clap::Parser;
+use std::fmt::Write;
 
 pub const MB: usize = 1024 * 1024;
 pub const GB: usize = 1024 * MB;
@@ -54,17 +55,24 @@ fn main() {
     // Parse difficulty from hex string to u32 mask
     let difficulty_mask = u32::from_str_radix(&args.difficulty, 16).unwrap();
 
+    // Pre-compute the string suffix
+    let suffix = format!(
+        "{}{}{}{}{}{}",
+        args.address,
+        args.challenge_id,
+        args.difficulty,
+        args.no_pre_mine,
+        args.latest_submission,
+        args.no_pre_mine_hour
+    );
+
+    // Pre-allocate the string for the pre-image
+    let mut preimage = String::with_capacity(16 + suffix.len());
+
     loop {
-        let preimage = format!(
-            "{0:016x}{1}{2}{3}{4}{5}{6}",
-            nonce,
-            args.address,
-            args.challenge_id,
-            args.difficulty, // This is the hex string, not the number of zero bits
-            args.no_pre_mine,
-            args.latest_submission,
-            args.no_pre_mine_hour
-        );
+        // Update the pre-image with the new nonce
+        preimage.clear();
+        write!(&mut preimage, "{:016x}{}", nonce, suffix).unwrap();
 
         let hash_result = hash(&preimage.as_bytes(), &rom, 8, 256);
 
