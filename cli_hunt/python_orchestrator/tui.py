@@ -278,7 +278,6 @@ class OrchestratorTUI(App):
     def on_solution_found(self, message: SolutionFound) -> None:
         """Handle a solution being found by a worker."""
         count, elapsed, hour_rolled = self.solutions_tracker.increment()
-        elapsed_minutes = elapsed.total_seconds() / 60
 
         if hour_rolled:
             # The hour just finished – report the total for the *previous* hour
@@ -290,6 +289,7 @@ class OrchestratorTUI(App):
                 LogMessage("-----------------------------------------------")
             )
         else:
+            elapsed_minutes = elapsed.total_seconds() / 60
             self.post_message(
                 LogMessage(
                     f"Solutions this hour: {count} - Elapsed: {elapsed_minutes:.2f} min"
@@ -323,7 +323,14 @@ class OrchestratorTUI(App):
         solve_interval = self.worker_args["solve_interval"]
         max_solvers = self.worker_args["max_solvers"]
         challenge_selection = self.worker_args["challenge_selection"]
-        solver_func(self.db_manager, self.stop_event, solve_interval, self, max_solvers, challenge_selection)
+        solver_func(
+            self.db_manager,
+            self.stop_event,
+            solve_interval,
+            self,
+            max_solvers,
+            challenge_selection,
+        )
 
     @work(name="saver", group="workers", thread=True)
     def run_saver_worker(self) -> None:
