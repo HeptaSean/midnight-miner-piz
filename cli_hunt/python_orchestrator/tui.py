@@ -1,7 +1,7 @@
 import logging
 import threading
 from collections import OrderedDict
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from textual import work
 from textual.app import App, ComposeResult
@@ -45,6 +45,39 @@ class StatsUpdate(Message):
         super().__init__()
 
 
+class SolutionFound(Message):
+    """Message to signal that a solution was found."""
+
+    pass
+
+
+class SolutionsTracker:
+    """Thread-safe counter for solutions in the last rolling hour."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        # start of the current 1-hour window
+        self.window_start = datetime.now(timezone.utc)
+        self.count = 0
+
+    def increment(self):
+        """Call every time a solution is found. Returns (count, elapsed_minutes)."""
+        with self._lock:
+            now = datetime.now(timezone.utc)
+            elapsed = now - self.window_start
+
+            # If we crossed the hour boundary, reset the counter
+            if elapsed >= timedelta(hours=1):
+                old_count = self.count
+                self.count = 1
+                hours_passed = int(elapsed.total_seconds() // 3600)
+                self.window_start += timedelta(hours=hours_passed)
+                return old_count, None, True  # True = hour just rolled over
+            else:
+                self.count += 1
+                return self.count, elapsed, False
+
+
 # --- The Main TUI Application ---
 
 
@@ -52,7 +85,7 @@ class OrchestratorTUI(App):
     """A Textual TUI for the Midnight Scavenger Hunt orchestrator."""
 
     TITLE = "Midnight Scavenger Hunt Orchestrator"
-    
+
     def __init__(
         self, db_manager, worker_functions: dict, worker_args: dict, *args, **kwargs
     ):
@@ -61,6 +94,7 @@ class OrchestratorTUI(App):
         self.worker_functions = worker_functions
         self.worker_args = worker_args
         self.stop_event = threading.Event()
+        self.solutions_tracker = SolutionsTracker()  # Initialize here
 
         # Internal state for the table
         self._addresses = []
@@ -89,17 +123,19 @@ class OrchestratorTUI(App):
         self.stats_total = self.query_one("#stats_total", Static)
 
         self.log_widget.write_line("TUI mounted. Initializing table...")
-        
+
         # Load existing wallet statistics from database
         self._wallet_stats = self.db_manager.get_all_wallet_statistics()
         self._total_mined = sum(self._wallet_stats.values())
-        
+
         self.refresh_table_structure()
         self.refresh_stats_table()
         self.run_startup_stats_update()
-        
+
         if self._total_mined > 0:
-            self.log_widget.write_line(f"💰 Loaded existing stats: {self._total_mined:.6f} total mined")
+            self.log_widget.write_line(
+                f"💰 Loaded existing stats: {self._total_mined:.6f} total mined"
+            )
 
         self.log_widget.write_line("Starting background worker threads...")
         self.run_fetcher_worker()
@@ -170,18 +206,18 @@ class OrchestratorTUI(App):
     def refresh_stats_table(self) -> None:
         """Initialize or rebuild the stats table with wallet mining statistics."""
         self.stats_table.clear(columns=True)
-        
+
         # Add columns
         self.stats_table.add_column("Address", key="address", width=15)
         self.stats_table.add_column("Total Mined", key="total_mined", width=15)
-        
+
         # Add rows for each wallet
         for addr in self._addresses:
             short_addr = f"{addr[:6]}...{addr[-4:]}"
             total_mined = self._wallet_stats.get(addr, 0.0)
             total_mined_str = f"{total_mined:.6f}" if total_mined > 0 else "0.000000"
             self.stats_table.add_row(short_addr, total_mined_str, key=addr)
-        
+
         # Update total in header
         self.stats_total.update(f"TOTAL: {self._total_mined:.6f}")
 
@@ -219,21 +255,46 @@ class OrchestratorTUI(App):
         """Update wallet statistics in the stats table and display total."""
         self._wallet_stats = message.stats
         self._total_mined = message.total
-        
+
         # Update the stats table
         for addr, total_mined in message.stats.items():
             if addr in self._addresses:
-                total_mined_str = f"{total_mined:.6f}" if total_mined > 0 else "0.000000"
+                total_mined_str = (
+                    f"{total_mined:.6f}" if total_mined > 0 else "0.000000"
+                )
                 try:
                     self.stats_table.update_cell(addr, "total_mined", total_mined_str)
                 except KeyError:
                     pass  # Address not in current table view
-        
+
         # Update total in header
         self.stats_total.update(f"TOTAL: {self._total_mined:.6f}")
-        
+
         # Log the total
-        self.log_widget.write_line(f"💰 Total mined across all wallets: {self._total_mined:.6f}")
+        self.log_widget.write_line(
+            f"💰 Total mined across all wallets: {self._total_mined:.6f}"
+        )
+
+    def on_solution_found(self, message: SolutionFound) -> None:
+        """Handle a solution being found by a worker."""
+        count, elapsed, hour_rolled = self.solutions_tracker.increment()
+        elapsed_minutes = elapsed.total_seconds() / 60
+
+        if hour_rolled:
+            # The hour just finished – report the total for the *previous* hour
+            self.post_message(
+                LogMessage("-----------------------------------------------")
+            )
+            self.post_message(LogMessage(f"Total solutions past hour: {count}"))
+            self.post_message(
+                LogMessage("-----------------------------------------------")
+            )
+        else:
+            self.post_message(
+                LogMessage(
+                    f"Solutions this hour: {count} - Elapsed: {elapsed_minutes:.2f} min"
+                )
+            )
 
     # --- Actions ---
 
@@ -275,24 +336,26 @@ class OrchestratorTUI(App):
     def run_stats_worker(self) -> None:
         """Runs the wallet statistics updater logic in a background thread."""
         stats_func = self.worker_functions["stats"]
-        interval = self.worker_args.get("stats_interval", 60 * 60 * 24)  # Default 24 hours
+        interval = self.worker_args.get(
+            "stats_interval", 60 * 60 * 24
+        )  # Default 24 hours
         stats_func(self.db_manager, self.stop_event, interval, self)
-        
+
     @work(name="startup_stats", thread=True)
     def run_startup_stats_update(self) -> None:
         """Fetches fresh wallet statistics on startup."""
         from main import fetch_wallet_statistics
-        
+
         addresses = self.db_manager.get_addresses()
         for address in addresses:
             total_mined = fetch_wallet_statistics(address)
             if total_mined is not None:
                 self.db_manager.update_wallet_statistics(address, total_mined)
-        
+
         # Get all stats and calculate total
         all_stats = self.db_manager.get_all_wallet_statistics()
         total = sum(all_stats.values())
-        
+
         # Send stats update to TUI
         self.post_message(StatsUpdate(all_stats, total))
-        self.post_message(LogMessage(f"✅ Startup statistics update complete"))
+        self.post_message(LogMessage("✅ Startup statistics update complete"))
