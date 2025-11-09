@@ -5,9 +5,9 @@ from datetime import datetime
 
 from textual import work
 from textual.app import App, ComposeResult
-from textual.containers import VerticalScroll
+from textual.containers import Container, Horizontal, VerticalScroll
 from textual.message import Message
-from textual.widgets import DataTable, Footer, Header, Log
+from textual.widgets import DataTable, Footer, Header, Log, Static
 
 # --- Custom Messages for thread-safe UI updates ---
 
@@ -36,6 +36,15 @@ class RefreshTable(Message):
     pass
 
 
+class StatsUpdate(Message):
+    """Message to update wallet statistics display."""
+
+    def __init__(self, stats: dict, total: float) -> None:
+        self.stats = stats  # Dict of {address: total_mined}
+        self.total = total
+        super().__init__()
+
+
 # --- The Main TUI Application ---
 
 
@@ -43,9 +52,7 @@ class OrchestratorTUI(App):
     """A Textual TUI for the Midnight Scavenger Hunt orchestrator."""
 
     TITLE = "Midnight Scavenger Hunt Orchestrator"
-    # CSS can be added for styling. For now, we use defaults.
-    # CSS_PATH = "tui.css"
-
+    
     def __init__(
         self, db_manager, worker_functions: dict, worker_args: dict, *args, **kwargs
     ):
@@ -58,27 +65,47 @@ class OrchestratorTUI(App):
         # Internal state for the table
         self._addresses = []
         self._challenge_ids = OrderedDict()  # challenge_id -> short_id
+        self._wallet_stats = {}  # address -> total_mined
+        self._total_mined = 0.0
 
     def compose(self) -> ComposeResult:
         """Create child widgets for the app."""
         yield Header()
         with VerticalScroll():
             yield DataTable(id="challenges_table", cursor_type="row")
-        yield Log(id="logs", auto_scroll=True, max_lines=1000)
+        with Horizontal():
+            yield Log(id="logs", auto_scroll=True, max_lines=1000)
+            with Container(id="stats_container"):
+                yield Static("💰 Wallet Mining Statistics", id="stats_header")
+                yield Static("TOTAL: 0.000000", id="stats_total")
+                yield DataTable(id="stats_table", cursor_type="row")
         yield Footer()
 
     def on_mount(self) -> None:
         """Called when the app is mounted."""
         self.log_widget = self.query_one(Log)
         self.table = self.query_one(DataTable)
+        self.stats_table = self.query_one("#stats_table", DataTable)
+        self.stats_total = self.query_one("#stats_total", Static)
 
         self.log_widget.write_line("TUI mounted. Initializing table...")
+        
+        # Load existing wallet statistics from database
+        self._wallet_stats = self.db_manager.get_all_wallet_statistics()
+        self._total_mined = sum(self._wallet_stats.values())
+        
         self.refresh_table_structure()
+        self.refresh_stats_table()
+        self.run_startup_stats_update()
+        
+        if self._total_mined > 0:
+            self.log_widget.write_line(f"💰 Loaded existing stats: {self._total_mined:.6f} total mined")
 
         self.log_widget.write_line("Starting background worker threads...")
         self.run_fetcher_worker()
         self.run_solver_worker()
         self.run_saver_worker()
+        self.run_stats_worker()
 
     def _get_status_display(self, status: str) -> str:
         """Return a user-friendly (emoji) string for a status."""
@@ -140,6 +167,24 @@ class OrchestratorTUI(App):
             for c in displayed_challenges:
                 self.post_message(ChallengeUpdate(addr, c["challengeId"], c["status"]))
 
+    def refresh_stats_table(self) -> None:
+        """Initialize or rebuild the stats table with wallet mining statistics."""
+        self.stats_table.clear(columns=True)
+        
+        # Add columns
+        self.stats_table.add_column("Address", key="address", width=15)
+        self.stats_table.add_column("Total Mined", key="total_mined", width=15)
+        
+        # Add rows for each wallet
+        for addr in self._addresses:
+            short_addr = f"{addr[:6]}...{addr[-4:]}"
+            total_mined = self._wallet_stats.get(addr, 0.0)
+            total_mined_str = f"{total_mined:.6f}" if total_mined > 0 else "0.000000"
+            self.stats_table.add_row(short_addr, total_mined_str, key=addr)
+        
+        # Update total in header
+        self.stats_total.update(f"TOTAL: {self._total_mined:.6f}")
+
     # --- Message Handlers ---
 
     def on_log_message(self, message: LogMessage) -> None:
@@ -169,6 +214,26 @@ class OrchestratorTUI(App):
         """Handle request to perform a full table refresh."""
         self.log_widget.write_line("Refreshing table data...")
         self.refresh_table_structure()
+
+    def on_stats_update(self, message: StatsUpdate) -> None:
+        """Update wallet statistics in the stats table and display total."""
+        self._wallet_stats = message.stats
+        self._total_mined = message.total
+        
+        # Update the stats table
+        for addr, total_mined in message.stats.items():
+            if addr in self._addresses:
+                total_mined_str = f"{total_mined:.6f}" if total_mined > 0 else "0.000000"
+                try:
+                    self.stats_table.update_cell(addr, "total_mined", total_mined_str)
+                except KeyError:
+                    pass  # Address not in current table view
+        
+        # Update total in header
+        self.stats_total.update(f"TOTAL: {self._total_mined:.6f}")
+        
+        # Log the total
+        self.log_widget.write_line(f"💰 Total mined across all wallets: {self._total_mined:.6f}")
 
     # --- Actions ---
 
@@ -204,3 +269,29 @@ class OrchestratorTUI(App):
         saver_func = self.worker_functions["saver"]
         interval = self.worker_args["save_interval"]
         saver_func(self.db_manager, self.stop_event, interval, self)
+
+    @work(name="stats", group="workers", thread=True)
+    def run_stats_worker(self) -> None:
+        """Runs the wallet statistics updater logic in a background thread."""
+        stats_func = self.worker_functions["stats"]
+        interval = self.worker_args.get("stats_interval", 60 * 60 * 24)  # Default 24 hours
+        stats_func(self.db_manager, self.stop_event, interval, self)
+        
+    @work(name="startup_stats", thread=True)
+    def run_startup_stats_update(self) -> None:
+        """Fetches fresh wallet statistics on startup."""
+        from main import fetch_wallet_statistics
+        
+        addresses = self.db_manager.get_addresses()
+        for address in addresses:
+            total_mined = fetch_wallet_statistics(address)
+            if total_mined is not None:
+                self.db_manager.update_wallet_statistics(address, total_mined)
+        
+        # Get all stats and calculate total
+        all_stats = self.db_manager.get_all_wallet_statistics()
+        total = sum(all_stats.values())
+        
+        # Send stats update to TUI
+        self.post_message(StatsUpdate(all_stats, total))
+        self.post_message(LogMessage(f"✅ Startup statistics update complete"))

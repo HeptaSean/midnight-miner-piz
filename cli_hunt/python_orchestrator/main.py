@@ -6,10 +6,10 @@ import concurrent.futures
 import subprocess
 import threading
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from curl_cffi import requests
-from tui import ChallengeUpdate, LogMessage, OrchestratorTUI, RefreshTable
+from tui import ChallengeUpdate, LogMessage, OrchestratorTUI, RefreshTable, StatsUpdate
 
 # --- Constants ---
 DB_FILE = "challenges.json"
@@ -22,6 +22,7 @@ FETCH_INTERVAL = 10 * 60  # 10 minutes
 DEFAULT_MAX_SOLVERS = 2  # Two solvers in parallel by default
 DEFAULT_SOLVE_INTERVAL = 2 * 60  # 2 minutes
 DEFAULT_SAVE_INTERVAL = 10 * 60  # 10 minutes
+DEFAULT_STATS_INTERVAL = 60 * 60 * 24  # 24 hours
 
 
 # --- HTTP Session Setup ---
@@ -46,6 +47,25 @@ def setup_logging():
     # Silence noisy libraries
     logging.getLogger("requests").setLevel(logging.WARNING)
     logging.getLogger("urllib3").setLevel(logging.WARNING)
+
+
+# --- Wallet Statistics Functions ---
+def fetch_wallet_statistics(address):
+    """Fetch mining statistics for a wallet from the API."""
+    try:
+        url = f"https://scavenger.prod.gd.midnighttge.io/statistics/{address}"
+        response = session.get(url, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        
+        # Extract night_allocation and divide by 1000000
+        night_allocation = data.get("local", {}).get("night_allocation", 0)
+        total_mined = night_allocation / 1000000
+        
+        return total_mined
+    except Exception as e:
+        logging.error(f"Error fetching statistics for {address[:10]}...: {e}")
+        return None
 
 
 # --- DatabaseManager for Thread-Safe Operations ---
@@ -168,6 +188,26 @@ class DatabaseManager:
     def get_challenge_queue(self, address):
         with self._lock:
             return deepcopy(self._db.get(address, {}).get("challenge_queue", []))
+
+    def update_wallet_statistics(self, address, total_mined):
+        """Update the total mined amount for a wallet."""
+        with self._lock:
+            if address in self._db:
+                self._db[address]["total_mined"] = total_mined
+                self._db[address]["stats_updated_at"] = datetime.now(timezone.utc).isoformat()
+
+    def get_wallet_statistics(self, address):
+        """Get the total mined amount for a wallet."""
+        with self._lock:
+            return self._db.get(address, {}).get("total_mined", 0)
+
+    def get_all_wallet_statistics(self):
+        """Get total mined for all wallets."""
+        with self._lock:
+            stats = {}
+            for address, data in self._db.items():
+                stats[address] = data.get("total_mined", 0)
+            return stats
 
     def save_to_disk(self):
         logging.info("Saving database to disk...")
@@ -427,7 +467,7 @@ def solver_worker(db_manager, stop_event, solve_interval, tui_app, max_solvers):
                             latest_submission = datetime.fromisoformat(
                                 c["latestSubmission"].replace("Z", "+00:00")
                             )
-                            if now > latest_submission:
+                            if now > latest_submission - timedelta(hours=1):
                                 # Expire challenge
                                 updated_status = db_manager.update_challenge(
                                     address, c["challengeId"], {"status": "expired"}
@@ -514,6 +554,38 @@ def saver_worker(db_manager, stop_event, interval, tui_app):
     logging.info("Saver thread stopped.")
 
 
+def stats_worker(db_manager, stop_event, interval, tui_app):
+    """Worker thread to periodically update wallet mining statistics."""
+    tui_app.post_message(
+        LogMessage(
+            f"Stats updater started. Updating every {interval / 60:.1f} minutes."
+        )
+    )
+    while not stop_event.is_set():
+        stop_event.wait(interval)
+        if stop_event.is_set():
+            break
+        
+        # Update wallet statistics from API
+        addresses = db_manager.get_addresses()
+        tui_app.post_message(LogMessage("Updating wallet statistics..."))
+        for address in addresses:
+            total_mined = fetch_wallet_statistics(address)
+            if total_mined is not None:
+                db_manager.update_wallet_statistics(address, total_mined)
+        
+        # Get all stats and calculate total
+        all_stats = db_manager.get_all_wallet_statistics()
+        total = sum(all_stats.values())
+        
+        # Send stats update to TUI
+        tui_app.post_message(StatsUpdate(all_stats, total))
+        
+        # Save updated stats to disk
+        db_manager.save_to_disk()
+    logging.info("Stats updater thread stopped.")
+
+
 # --- Main Application Logic ---
 def init_db(json_files):
     """Initializes or updates the main database file from JSON inputs."""
@@ -582,11 +654,13 @@ def run_orchestrator(args):
         "fetcher": fetcher_worker,
         "solver": solver_worker,
         "saver": saver_worker,
+        "stats": stats_worker,
     }
 
     worker_args = {
         "solve_interval": args.solve_interval,
         "save_interval": args.save_interval,
+        "stats_interval": args.stats_interval,
         "max_solvers": args.max_solvers,
     }
 
@@ -628,6 +702,12 @@ def main():
         type=int,
         default=DEFAULT_SAVE_INTERVAL,
         help=f"Interval in seconds for saving the database to disk (default: {DEFAULT_SAVE_INTERVAL}).",
+    )
+    run_parser.add_argument(
+        "--stats-interval",
+        type=int,
+        default=DEFAULT_STATS_INTERVAL,
+        help=f"Interval in seconds for updating wallet mining statistics (default: {DEFAULT_STATS_INTERVAL}).",
     )
 
     args = parser.parse_args()
