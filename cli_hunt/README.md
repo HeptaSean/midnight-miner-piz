@@ -1,11 +1,13 @@
 # Midnight Scavenger CLI Miner
 
+This repository contains my fork of [https://github.com/mpizenberg/ce-ashmaize/tree/piz/cli_hunt](https://github.com/mpizenberg/ce-ashmaize/tree/piz/cli_hunt).
+
 This project provides a command-line interface (CLI) alternative to the web app for the Midnight Scavenger mining process.
 Wallet creation and scavenger hunt registration are NOT handled and still require you to use the web interface, for obvious non-gaming reasons.
 This tool only streamlines the continuous process of requesting, solving, and submitting new challenges, in an alternative way to the browser.
 The tool can manage multiple mining addresses and keep track of their challenge progress locally.
 
-<img width="2712" height="1904" alt="image" src="https://github.com/user-attachments/assets/552ae061-46fa-4b62-9fd7-b18b136bb33a" />
+<img alt="Screenshot of the miner" src="https://raw.githubusercontent.com/HeptaSean/midnight-miner-piz/refs/heads/hepta/cli_hunt/screenshot.png" />
 
 ## Features
 
@@ -34,10 +36,8 @@ This is a fork of the [original repository](https://github.com/input-output-hk/c
 Then move into the `cli_hunt` subfolder where I added this tool.
 
 ```bash
-git clone https://github.com/mpizenberg/ce-ashmaize.git
-cd ce-ashmaize
-git checkout piz
-cd cli_hunt
+git clone https://github.com/HeptaSean/midnight-miner-piz.git
+cd midnight-miner-piz/cli_hunt
 ```
 
 ### Building the Rust Solver
