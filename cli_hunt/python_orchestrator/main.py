@@ -29,7 +29,7 @@ FETCH_INTERVAL = 10 * 60  # 10 minutes
 DEFAULT_MAX_SOLVERS = 2  # Two solvers in parallel by default
 DEFAULT_SOLVE_INTERVAL = 2 * 60  # 2 minutes
 DEFAULT_SAVE_INTERVAL = 10 * 60  # 10 minutes
-DEFAULT_STATS_INTERVAL = 10 * 60  # 10 minutes
+DEFAULT_STATS_INTERVAL = 60 * 60  # 60 minutes
 
 
 # --- HTTP Session Setup ---
@@ -463,7 +463,9 @@ def _solve_one_challenge(db_manager, tui_app, stop_event, address, challenge):
         tui_app.post_message(ChallengeUpdate(address, c["challengeId"], "available"))
 
 
-def solver_worker(db_manager, stop_event, solve_interval, tui_app, max_solvers, challenge_selection):
+def solver_worker(
+    db_manager, stop_event, solve_interval, tui_app, max_solvers, challenge_selection
+):
     tui_app.post_message(
         LogMessage(
             f"Solver thread started with {max_solvers} workers. Polling every {solve_interval / 60:.1f} minutes."
@@ -512,12 +514,14 @@ def solver_worker(db_manager, stop_event, solve_interval, tui_app, max_solvers, 
                             else:
                                 all_available_challenges.append((address, c))
 
-                if (challenge_selection == "first"):
+                if challenge_selection == "first":
                     # Sort challenges by challengeId to prioritize the oldest
                     all_available_challenges.sort(key=lambda x: x[1]["challengeId"])
-                elif (challenge_selection == "last"):
+                elif challenge_selection == "last":
                     # Sort challenges by challengeId to prioritize the youngest
-                    all_available_challenges.sort(key=lambda x: x[1]["challengeId"], reverse=True)
+                    all_available_challenges.sort(
+                        key=lambda x: x[1]["challengeId"], reverse=True
+                    )
 
                 for address, c in all_available_challenges:
                     if available_slots > 0:
@@ -613,7 +617,9 @@ def stats_worker(db_manager, stop_event, interval, tui_app):
         total_night = sum(all_night.values())
 
         # Send stats update to TUI
-        tui_app.post_message(StatsUpdate(all_receipts, total_receipts, all_night, total_night))
+        tui_app.post_message(
+            StatsUpdate(all_receipts, total_receipts, all_night, total_night)
+        )
 
         # Save updated stats to disk
         db_manager.save_to_disk()
@@ -696,7 +702,7 @@ def run_orchestrator(args):
         "save_interval": args.save_interval,
         "stats_interval": args.stats_interval,
         "max_solvers": args.max_solvers,
-        "challenge_selection": args.challenge_selection
+        "challenge_selection": args.challenge_selection,
     }
 
     app = OrchestratorTUI(
@@ -731,7 +737,7 @@ def main():
         type=str,
         choices=["first", "last"],
         default="first",
-        help="Strategy for selecting the next challenge to solve (default: first, other option: last)"
+        help="Strategy for selecting the next challenge to solve (default: first, other option: last)",
     )
     run_parser.add_argument(
         "--solve-interval",

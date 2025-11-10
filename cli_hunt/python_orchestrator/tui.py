@@ -39,7 +39,13 @@ class RefreshTable(Message):
 class StatsUpdate(Message):
     """Message to update wallet statistics display."""
 
-    def __init__(self, all_receipts: dict, total_receipts: int, all_night: dict, total_night: float) -> None:
+    def __init__(
+        self,
+        all_receipts: dict,
+        total_receipts: int,
+        all_night: dict,
+        total_night: float,
+    ) -> None:
         self.all_receipts = all_receipts  # Dict of {address: receipts}
         self.total_receipts = total_receipts
         self.all_night = all_night  # Dict of {address: night}
@@ -129,7 +135,9 @@ class OrchestratorTUI(App):
         self.log_widget.write_line("TUI mounted. Initializing table...")
 
         # Load existing wallet statistics from database
-        (self._all_receipts, self._all_night) = self.db_manager.get_all_wallet_statistics()
+        (self._all_receipts, self._all_night) = (
+            self.db_manager.get_all_wallet_statistics()
+        )
         self._total_receipts = sum(self._all_receipts.values())
         self._total_night = sum(self._all_night.values())
 
@@ -226,7 +234,9 @@ class OrchestratorTUI(App):
             self.stats_table.add_row(short_addr, f"{receipts}", night_str, key=addr)
 
         # Update total in header
-        self.stats_total.update(f"Total: {self._total_receipts} receipts, {self._total_night:.6f} NIGHT")
+        self.stats_total.update(
+            f"Total: {self._total_receipts} receipts, {self._total_night:.6f} NIGHT"
+        )
 
     # --- Message Handlers ---
 
@@ -274,16 +284,16 @@ class OrchestratorTUI(App):
                     pass  # Address not in current table view
         for addr, night in message.all_night.items():
             if addr in self._addresses:
-                night_str = (
-                    f"{night:.6f}" if night > 0 else "0.000000"
-                )
+                night_str = f"{night:.6f}" if night > 0 else "0.000000"
                 try:
                     self.stats_table.update_cell(addr, "night", night_str)
                 except KeyError:
                     pass  # Address not in current table view
 
         # Update total in header
-        self.stats_total.update(f"Total: {self._total_receipts} receipts, {self._total_night:.6f} NIGHT")
+        self.stats_total.update(
+            f"Total: {self._total_receipts} receipts, {self._total_night:.6f} NIGHT"
+        )
 
         # Log the total
         self.log_widget.write_line(
@@ -358,9 +368,7 @@ class OrchestratorTUI(App):
     def run_stats_worker(self) -> None:
         """Runs the wallet statistics updater logic in a background thread."""
         stats_func = self.worker_functions["stats"]
-        interval = self.worker_args.get(
-            "stats_interval", 60 * 10
-        )  # Default 10 minutes
+        interval = self.worker_args.get("stats_interval", 60 * 60)  # Default 60 minutes
         stats_func(self.db_manager, self.stop_event, interval, self)
 
     @work(name="startup_stats", thread=True)
@@ -372,7 +380,9 @@ class OrchestratorTUI(App):
         for address in addresses:
             (crypto_receipts, night) = fetch_wallet_statistics(address)
             if crypto_receipts is not None and night is not None:
-                self.db_manager.update_wallet_statistics(address, crypto_receipts, night)
+                self.db_manager.update_wallet_statistics(
+                    address, crypto_receipts, night
+                )
 
         # Get all stats and calculate total
         (all_receipts, all_night) = self.db_manager.get_all_wallet_statistics()
@@ -380,5 +390,7 @@ class OrchestratorTUI(App):
         total_night = sum(all_night.values())
 
         # Send stats update to TUI
-        self.post_message(StatsUpdate(all_receipts, total_receipts, all_night, total_night))
+        self.post_message(
+            StatsUpdate(all_receipts, total_receipts, all_night, total_night)
+        )
         self.post_message(LogMessage("✅ Startup statistics update complete"))
