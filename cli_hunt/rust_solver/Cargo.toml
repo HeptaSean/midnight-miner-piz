@@ -8,3 +8,12 @@ ashmaize = { path = "../../" } # This points to the root ashmaize crate
 hex = "0.4"
 clap = { version = "4.0", features = ["derive"] }
 rayon = "1.11.0"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"
+incremental = false
+rustflags = ["-C", "target-cpu=native"]
