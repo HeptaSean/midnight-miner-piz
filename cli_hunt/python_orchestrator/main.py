@@ -76,7 +76,8 @@ def fetch_wallet_statistics(address):
     except Exception as e:
         short_address = f"{address[:10]}…{address[-6:]}"
         logging.error(f"Error fetching statistics for {short_address}: {e}")
-        return None
+        # Return zeroes instead of crashing the whole orchestrator if fetch fails
+        return (0, 0)
 
 
 # --- DatabaseManager for Thread-Safe Operations ---
