@@ -117,7 +117,8 @@ I’ve made a very simple web page that will help you craft that request by doin
 This page does not do the request directly because the various firewalls and anti-ddos protections of the API make it difficult to do directly from the web page.
 Instead you are provided the curl command to run yourself in the terminal, which is much more reliable.
 
-To open the web page, you can either use the one I host on GitHub directly (TODO: add link), or use the following command in your terminal inside the `donate_to/` directory.
+To open the web page, you can either use the one I host on GitHub directly https://mpizenberg.github.io/ce-ashmaize/
+or use the following command in your terminal inside the `donate_to/` directory.
 
 ```sh
 python -m http.server
