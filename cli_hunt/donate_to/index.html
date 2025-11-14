@@ -1,0 +1,432 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <title>Scavenger Hunt Donation</title>
+        <style>
+            body {
+                font-family: sans-serif;
+                line-height: 1.6;
+                padding: 20px;
+                max-width: 1200px;
+                margin: auto;
+            }
+            h1,
+            h2 {
+                border-bottom: 1px solid #ccc;
+                padding-bottom: 5px;
+            }
+            input[type="text"] {
+                width: 100%;
+                padding: 8px;
+                box-sizing: border-box;
+            }
+            button {
+                padding: 10px 15px;
+                cursor: pointer;
+            }
+            #wallets-list button {
+                display: flex;
+                align-items: center;
+                margin: 5px;
+            }
+            #wallets-list img {
+                width: 32px;
+                height: 32px;
+                margin-right: 10px;
+            }
+            #address-form div {
+                margin: 5px 0;
+            }
+            #result-output {
+                background-color: #f0f0f0;
+                padding: 10px;
+                white-space: pre-wrap;
+                word-wrap: break-word;
+            }
+            .hidden {
+                display: none;
+            }
+        </style>
+    </head>
+    <body>
+        <h1>Scavenger Hunt Rights Donation</h1>
+
+        <div id="wallet-section">
+            <h2>1. Connect Wallet</h2>
+            <p>No CIP-30 wallets found. Please install a Cardano wallet.</p>
+            <div id="wallets-list"></div>
+        </div>
+
+        <div id="address-section" class="hidden">
+            <h2>2. Select Your Registered Donor Address</h2>
+            <form id="address-form">
+                <p>
+                    No unused addresses found. Please ensure your wallet has
+                    unused addresses.
+                </p>
+            </form>
+        </div>
+
+        <div id="recipient-section" class="hidden">
+            <h2>3. Enter Recipient Address</h2>
+            <input
+                type="text"
+                id="recipient-addr"
+                placeholder="Enter recipient's address (addr...)"
+            />
+        </div>
+
+        <div id="donate-section" class="hidden">
+            <h2>4. Sign and Donate</h2>
+            <button id="donate-button">Donate Rights</button>
+        </div>
+
+        <div id="result-section">
+            <h2>Result</h2>
+            <pre id="result-output">Awaiting action...</pre>
+        </div>
+
+        <script>
+            "use strict";
+
+            const bech32 = (function () {
+                const ALPHABET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
+                const ALPHABET_MAP = {};
+                for (let z = 0; z < ALPHABET.length; z++) {
+                    const x = ALPHABET.charAt(z);
+                    ALPHABET_MAP[x] = z;
+                }
+                function polymodStep(pre) {
+                    const b = pre >> 25;
+                    return (
+                        ((pre & 0x1ffffff) << 5) ^
+                        (-((b >> 0) & 1) & 0x3b6a57b2) ^
+                        (-((b >> 1) & 1) & 0x26508e6d) ^
+                        (-((b >> 2) & 1) & 0x1ea119fa) ^
+                        (-((b >> 3) & 1) & 0x3d4233dd) ^
+                        (-((b >> 4) & 1) & 0x2a1462b3)
+                    );
+                }
+                function prefixChk(prefix) {
+                    let chk = 1;
+                    for (let i = 0; i < prefix.length; ++i) {
+                        const v = prefix.charCodeAt(i);
+                        if (v < 33 || v > 126)
+                            return "Invalid prefix (" + prefix + ")";
+                        chk = polymodStep(chk) ^ (v >> 5);
+                    }
+                    chk = polymodStep(chk);
+                    for (let i = 0; i < prefix.length; ++i) {
+                        const v = prefix.charCodeAt(i);
+                        chk = polymodStep(chk) ^ (v & 0x1f);
+                    }
+                    return chk;
+                }
+                function toWords(bytes) {
+                    const len = bytes.length;
+                    const words = [];
+                    let acc = 0;
+                    let bits = 0;
+                    for (let i = 0; i < len; ++i) {
+                        acc = (acc << 8) | bytes[i];
+                        bits += 8;
+                        while (bits >= 5) {
+                            bits -= 5;
+                            words.push((acc >>> bits) & 31);
+                        }
+                    }
+                    if (bits > 0) {
+                        words.push((acc << (5 - bits)) & 31);
+                    }
+                    return words;
+                }
+                function encode(prefix, words, LIMIT) {
+                    LIMIT = LIMIT || 90;
+                    if (prefix.length + 7 + words.length > LIMIT)
+                        throw new TypeError("Exceeds length limit");
+                    prefix = prefix.toLowerCase();
+                    let chk = prefixChk(prefix);
+                    if (typeof chk === "string") throw new Error(chk);
+                    let result = prefix + "1";
+                    for (let i = 0; i < words.length; ++i) {
+                        const x = words[i];
+                        if (x >> 5 !== 0) throw new Error("Invalid data");
+                        chk = polymodStep(chk) ^ x;
+                        result += ALPHABET.charAt(x);
+                    }
+                    for (let i = 0; i < 6; ++i) {
+                        chk = polymodStep(chk);
+                    }
+                    chk ^= 1;
+                    for (let i = 0; i < 6; ++i) {
+                        const v = (chk >> ((5 - i) * 5)) & 0x1f;
+                        result += ALPHABET.charAt(v);
+                    }
+                    return result;
+                }
+                return {
+                    encode: encode,
+                    toWords: toWords,
+                };
+            })();
+
+            // --- Wallet Discovery Code ---
+            async function cip30Discover() {
+                await new Promise((resolve) => setTimeout(resolve, 500));
+                return window.cardano
+                    ? Object.values(window.cardano).filter(isCip30)
+                    : [];
+            }
+
+            function isCip30(wallet) {
+                return ["name", "icon", "apiVersion", "isEnabled"].every(
+                    (key) => key in wallet,
+                );
+            }
+
+            // --- Application State ---
+            let selectedWalletApi = null;
+            let selectedDonorAddress = null;
+
+            // --- Utility Functions ---
+            function stringToHex(str) {
+                let hex = "";
+                for (let i = 0; i < str.length; i++) {
+                    hex += "" + str.charCodeAt(i).toString(16);
+                }
+                return hex;
+            }
+
+            function log(message) {
+                console.log(message);
+                document.getElementById("result-output").textContent =
+                    typeof message === "string"
+                        ? message
+                        : JSON.stringify(message, null, 2);
+            }
+
+            // --- Hex to Bech32 Conversion ---
+            function hexToBytes(hex) {
+                for (var bytes = [], c = 0; c < hex.length; c += 2)
+                    bytes.push(parseInt(hex.substr(c, 2), 16));
+                return bytes;
+            }
+
+            function convertCip30AddressToBech32(hexAddress) {
+                try {
+                    const addressBytes = hexToBytes(hexAddress);
+                    // The first byte of a Cardano address contains the header,
+                    // which includes network information.
+                    const networkId = addressBytes[0] & 0x0f;
+                    const prefix = networkId === 1 ? "addr" : "addr_test";
+                    // The bech32.toWords function is needed to convert the bytes to the 5-bit word format required by bech32.
+                    const words = bech32.toWords(addressBytes);
+                    return bech32.encode(prefix, words, 1000); // Increased limit for longer addresses
+                } catch (e) {
+                    console.error(
+                        `Failed to convert hex address ${hexAddress}:`,
+                        e,
+                    );
+                    return hexAddress; // Fallback to showing the hex address on error
+                }
+            }
+
+            // --- Core Application Logic ---
+
+            async function connectWallet(walletName) {
+                log(`Attempting to connect to ${walletName}...`);
+                try {
+                    selectedWalletApi =
+                        await window.cardano[walletName].enable();
+                    log(`${walletName} connected successfully.`);
+                    document
+                        .getElementById("address-section")
+                        .classList.remove("hidden");
+                    document
+                        .getElementById("recipient-section")
+                        .classList.remove("hidden");
+                    document
+                        .getElementById("donate-section")
+                        .classList.remove("hidden");
+                    await displayUnusedAddresses();
+                } catch (error) {
+                    log(`Error connecting to ${walletName}: ${error.message}`);
+                    console.error(error);
+                }
+            }
+
+            async function displayUnusedAddresses() {
+                if (!selectedWalletApi) {
+                    log("Wallet not connected.");
+                    return;
+                }
+                log("Fetching unused addresses...");
+                try {
+                    const unusedAddressesHex =
+                        await selectedWalletApi.getUnusedAddresses();
+                    const addressForm = document.getElementById("address-form");
+
+                    addressForm.innerHTML = ""; // Clear previous entries
+
+                    if (unusedAddressesHex.length === 0) {
+                        addressForm.innerHTML =
+                            "<p>No unused addresses found in this wallet.</p>";
+                        return;
+                    }
+
+                    unusedAddressesHex.forEach((addrHex, index) => {
+                        const bech32Addr = convertCip30AddressToBech32(addrHex);
+
+                        const container = document.createElement("div");
+                        const radio = document.createElement("input");
+                        radio.type = "radio";
+                        radio.name = "donor_address";
+                        // IMPORTANT: We store the bech32 address for signing, but the API might require the hex one.
+                        // Let's stick to bech32 for now as it's more standard for user-facing apps.
+                        radio.value = bech32Addr;
+                        radio.id = `addr-${index}`;
+                        radio.addEventListener("change", (e) => {
+                            selectedDonorAddress = e.target.value;
+                            log(
+                                `Selected donor address: ${selectedDonorAddress}`,
+                            );
+                        });
+
+                        const label = document.createElement("label");
+                        label.htmlFor = `addr-${index}`;
+                        label.textContent = bech32Addr;
+
+                        container.appendChild(radio);
+                        container.appendChild(label);
+                        addressForm.appendChild(container);
+                    });
+                    log(
+                        "Successfully fetched and displayed unused addresses in bech32 format.",
+                    );
+                } catch (error) {
+                    log(`Error fetching unused addresses: ${error.message}`);
+                    console.error(error);
+                }
+            }
+
+            async function handleDonate() {
+                const recipientAddr = document
+                    .getElementById("recipient-addr")
+                    .value.trim();
+
+                if (!selectedWalletApi) {
+                    log("Error: Wallet not connected.");
+                    return;
+                }
+                if (!selectedDonorAddress) {
+                    log("Error: Please select a donor address.");
+                    return;
+                }
+                if (!recipientAddr) {
+                    log("Error: Please enter a recipient address.");
+                    return;
+                }
+
+                log("Preparing to sign donation message...");
+
+                const message = `Assign accumulated Scavenger rights to: ${recipientAddr}`;
+                const payloadHex = stringToHex(message);
+
+                try {
+                    log(
+                        `Signing message: "${message}" with address: ${selectedDonorAddress}`,
+                    );
+                    const signedData = await selectedWalletApi.signData(
+                        selectedDonorAddress,
+                        payloadHex,
+                    );
+                    log(
+                        "Message signed successfully. Generating curl command...",
+                    );
+
+                    const signature = signedData.signature;
+                    const curlCommand = `curl -L -X POST "https://scavenger.prod.gd.midnighttge.io/donate_to/${recipientAddr}/${selectedDonorAddress}/${signature}" -d {}`;
+
+                    displayCurlCommand(curlCommand);
+                } catch (error) {
+                    log(`Failed to generate curl command: ${error.message}`);
+                    console.error(error);
+                }
+            }
+
+            function displayCurlCommand(curlCommand) {
+                const resultOutput = document.getElementById("result-output");
+                resultOutput.innerHTML = "";
+
+                const header = document.createElement("p");
+                header.textContent = "Copy and run this curl command:";
+                header.style.fontWeight = "bold";
+                header.style.marginBottom = "10px";
+
+                const commandPre = document.createElement("pre");
+                commandPre.textContent = curlCommand;
+                commandPre.style.backgroundColor = "#e8e8e8";
+                commandPre.style.padding = "15px";
+                commandPre.style.borderRadius = "5px";
+                commandPre.style.overflowX = "auto";
+                commandPre.style.marginBottom = "10px";
+
+                const copyButton = document.createElement("button");
+                copyButton.textContent = "Copy to Clipboard";
+                copyButton.style.padding = "10px 20px";
+                copyButton.style.fontSize = "14px";
+                copyButton.onclick = async () => {
+                    try {
+                        await navigator.clipboard.writeText(curlCommand);
+                        copyButton.textContent = "Copied!";
+                        setTimeout(() => {
+                            copyButton.textContent = "Copy to Clipboard";
+                        }, 2000);
+                    } catch (err) {
+                        console.error("Failed to copy:", err);
+                        copyButton.textContent = "Copy failed";
+                        setTimeout(() => {
+                            copyButton.textContent = "Copy to Clipboard";
+                        }, 2000);
+                    }
+                };
+
+                resultOutput.appendChild(header);
+                resultOutput.appendChild(commandPre);
+                resultOutput.appendChild(copyButton);
+            }
+
+            // --- Page Initialization ---
+            document.addEventListener("DOMContentLoaded", async () => {
+                const wallets = await cip30Discover();
+                console.log("wallets", wallets);
+                const walletsListDiv = document.getElementById("wallets-list");
+
+                if (wallets.length > 0) {
+                    document
+                        .querySelector("#wallet-section > p")
+                        .classList.add("hidden");
+                    wallets.forEach((wallet) => {
+                        const button = document.createElement("button");
+                        button.onclick = () => connectWallet(wallet.name);
+
+                        const icon = document.createElement("img");
+                        icon.src = wallet.icon;
+                        icon.alt = `${wallet.name} icon`;
+
+                        const text = document.createTextNode(wallet.name);
+
+                        button.appendChild(icon);
+                        button.appendChild(text);
+                        walletsListDiv.appendChild(button);
+                    });
+                }
+
+                document
+                    .getElementById("donate-button")
+                    .addEventListener("click", handleDonate);
+            });
+        </script>
+    </body>
+</html>

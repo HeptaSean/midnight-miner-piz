@@ -14,6 +14,7 @@ The tool can manage multiple mining addresses and keep track of their challenge 
 *   **Robust Data Handling**: Utilizes an append-only journal (`challenges.json.journal`) to prevent race conditions and ensure data integrity.
 *   **Efficient Solver**: Leverages a high-performance Rust binary for solving mining challenges.
 *   **TUI**: Provides a Text User Interface (TUI) written in Python for real-time visual feedback on mining progress.
+*   **Donate**: Provides a custom web page to help you call the `donate_to` API endpoint to consolidate your mining operations.
 
 ## Getting Started
 
@@ -100,12 +101,38 @@ uv run main.py run
 
 This will launch the TUI, providing visual feedback on the progress of fetching new challenges, solving them with the Rust binary, and submitting solutions. The orchestrator will continuously manage the mining process.
 
+### Donate your Mining Rights
+
+The midnight scavenger hunt has a feature to help you gather all your mining rewards from multiple addresses into a single (or few) address.
+This is the `donate_to` API endpoint that you can call to donate the rights of one address to another.
+Details of this endpoint are available in the following blog post: https://www.midnight.gd/news/how-to-consolidate-allocations-from-multiple-addresses-for-scavenger-mine
+
+I’ve made a very simple web page that will help you craft that request by doing the following:
+- connect to the cip-30 wallet,
+- list unused addresses so that you can select the one you registered and want to donate,
+- provide the recipient address (must also be registered),
+- ask you to sign the donation message with your wallet,
+- present you with the `curl` command to copy and paste in your terminal.
+
+This page does not do the request directly because the various firewalls and anti-ddos protections of the API make it difficult to do directly from the web page.
+Instead you are provided the curl command to run yourself in the terminal, which is much more reliable.
+
+To open the web page, you can either use the one I host on GitHub directly (TODO: add link), or use the following command in your terminal inside the `donate_to/` directory.
+
+```sh
+python -m http.server
+```
+
+This will create a minimalist static server in this folder on port 8000.
+You can open the local web page at http://localhost:8000/
+
 ## Project Structure
 
 The project is divided into two main components:
 
 *   `cli_hunt/python_orchestrator`: Contains the Python application responsible for orchestrating the entire mining process. This includes fetching challenges, managing the local database, and submitting solutions. It also hosts the interactive TUI.
 *   `cli_hunt/rust_solver`: Houses the high-performance Rust binary that performs the actual cryptographic challenge-solving computation.
+*   `cli_hunt/donate_to`: Contains the web page to help you with your scavenger rights donations to consolidate rewards in few addresses.
 
 ## Data Storage
 
