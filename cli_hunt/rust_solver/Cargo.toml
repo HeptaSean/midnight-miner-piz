@@ -9,9 +9,6 @@ hex = "0.4"
 clap = { version = "4.0", features = ["derive"] }
 rayon = "1.11.0"
 
-[build]
-rustflags = ["-C", "target-cpu=native", "-C", "link-arg=-s"]
-
 [profile.release]
 opt-level = 3
 lto = "fat"

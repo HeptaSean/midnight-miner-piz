@@ -1,0 +1,5 @@
+[build]
+rustflags = ["-C", "target-cpu=native", "-C", "opt-level=3",
+             "-C", "llvm-args=--inline-threshold=1000",
+             "-C", "link-arg=-s", "-C", "prefer-dynamic=no",
+             "-C", "target-feature=+aes,+sse2,+sse3,+ssse3,+sse4.1,+sse4.2,+avx,+avx2,+fma"]
