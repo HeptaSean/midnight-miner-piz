@@ -434,7 +434,7 @@ def solver_worker(
                             latest_submission = datetime.fromisoformat(
                                 c["latestSubmission"].replace("Z", "+00:00")
                             )
-                            if now > latest_submission - timedelta(hours=1):
+                            if now > latest_submission - timedelta(hours=10):
                                 # Expire challenge
                                 updated_status = db_manager.update_challenge(
                                     address, c["challengeId"], {"status": "expired"}
